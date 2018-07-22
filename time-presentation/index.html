@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+
+		<title>Introduction to JVM performance benchmarking</title>
+
+		<meta name="description" content="Introduction to JVM performance benchmarking">
+		<meta name="author" content="Anton Rybochkin">
+
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<link rel="stylesheet" href="css/reveal.min.css">
+		<link rel="stylesheet" href="css/theme/default.css" id="theme">
+
+		<!-- For syntax highlighting -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+        <style type="text/css">
+            .reveal p {
+                text-align: left;
+            }
+            .reveal h6 {
+                text-transform: none;
+            }
+            .reveal .intro a:not(.image) {
+                color: #eee8d5;
+            }
+            .now {
+                color: green;
+            }
+            strong {
+                color: white;
+            }
+            .now strong {
+                color: limegreen;
+            }
+        </style>
+
+        <!-- If the query includes 'print-pdf', include the PDF print sheet -->
+		<script>
+			if( window.location.search.match( /print-pdf/gi ) ) {
+				var link = document.createElement( 'link' );
+				link.rel = 'stylesheet';
+				link.type = 'text/css';
+				link.href = 'css/print/pdf.css';
+				document.getElementsByTagName( 'head' )[0].appendChild( link );
+			}
+		</script>
+    </head>
+
+	<body>
+
+		<div class="reveal">
+
+			<div class="slides">
+				<section class="intro" data-transition="zoom">
+					<h1>Evolution of datetime processing in ATSD</h1>
+                    <h4>By</h4>
+                    <h5>Anton Rybochkin</h5>
+                    <I><a target="_new" href="https://twitter.com/raipcs">@raipcs</a> | <a target="_new" href="https://github.com/raipc">https://github.com/raipc</a></I><br/><br/>
+                    <h6>13.06.2018</h6>
+                </section>
+
+                <section data-markdown data-transition="none">
+                    <textarea data-template>
+                        ## Safe Harbor Statement
+
+The following is intended to outline our general product direction. It is intended for information purposes only, and may not be incorporated into any contract. It is not a commitment to deliver any material, code, or functionality, and should not be relied upon in making purchasing decisions. The development, release, and timing of any features or functionality described for Axibase’s products remains at the sole discretion of Axibase. The presentation is based on author's fantasies, and neither him nor Axibase company may be a target of suing, be you even my mom, the Pope, the Flying Spaghetti Monster, Santa Claus, Santa's reindeer, the President of the United States, or Hugh Jackman.
+                    </textarea>
+                </section>
+
+                <section>
+                    <h2>Diversity is evil</h2>
+
+                    <ol>
+                        <li class="fragment">ISO8601 in UTC: custom parser, joda printer</li>
+                        <li class="fragment">SQL: FastDateFormat from Apache Commons</li>
+                        <li class="fragment">Rule Engine, UI local date format: joda.time.format.DateTimeFormatter</li>
+                        <li class="fragment">Forecasts, CSV Parser, UI except local date format: SimpleDateFormat</li>
+                        <li class="fragment now">Now: DatetimeProcessor</li>
+                    </ol>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## Caching
+<ol>
+    <li class="fragment">**FastDateFormat**: Unlimited cache using ConcurrentHashMap.</li>
+    <li class="fragment">**joda.time**: Cache in ConcurrentHashMap limited to 5000 patterns. No cache replacement policy.</li>
+    <li class="fragment">**SimpleDateFormat**: no caching, no thread-safety.</li>
+    <li class="fragment">**JSR-310**: no caching.</li>
+    <li class="fragment now">**DatetimeProcessor**: Guava LRU cache. Max number of patterns is controlled by the parameter (default is 100): <pre><code class="java ">cache.formatters.maximum.size</code></pre></li>
+</ol>
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## Supported format
+
+DatetimeProcessor supports Java 8 DateTimeFormatter patterns with several differences:
+
+<ol>
+    <li>No need to escape **T** literal</li>
+    <li>**u** translates to **ccccc** (day of week starting from Monday)</li>
+    <li>**Z** pattern translates to **XX** (RFC822 offset, Z for zulu)</li>
+    <li>**ZZ** pattern translates to **XXX** (ISO8601 offset, Z for zulu)</li>
+    <li>**ZZZ** pattern translates to **VV** (Zone ID)</li>
+</ol>
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## API
+
+```java
+public interface DatetimeProcessor {
+    long parseMillis(String datetime);
+
+    long parseMillis(String datetime, @NotNull ZoneId zoneId);
+
+    ZonedDateTime parse(String datetime);
+
+    ZonedDateTime parse(String datetime, @NotNull ZoneId zoneId);
+
+    String print(long timestamp);
+
+    String print(long timestamp, @NotNull ZoneId zoneId);
+}
+```
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## API
+
+```java
+DatetimeProcessor fmt = DateTimeFormatterManager.createFormatter(pattern); // for multiple usage of custom format
+String datetime = TimeUtils.formatDateTime(millis, pattern, zoneId); // for single usage of custom format
+String datetime = TimeUtils.formatDateTime(millis, pattern);
+long timestamp = TimeUtils.parseMillis(timestamp, pattern);
+
+long timestamp = TimeUtils.parseWithDefaultParser(datetime); // for tests or best-effort parsing
+
+long timestamp = parseISO8601(String date);
+String datetime = formatISO8601(long time);
+String datetime = formatISO8601millis(long time);
+String datetime = formatLocalNoTimezone(long time);
+String datetime = formatLocalMillisNoTz(long time);
+```
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## Performance
+
+<iframe class="stretch" width="100%" height="500px" allowfullscreen src="https://apps.axibase.com/chartlab/972babb9/8/"></iframe>
+<a href="https://apps.axibase.com/chartlab/972babb9/8/">Source</a>
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+                        ## Performance Tricks
+
+<ol>
+    <li class="fragment">Use JSR-310 ZoneOffset instead of TimeZone to parse zone offsets<br/>
+    Profit: free RFC822 offsets support</li>
+    <li class="fragment">Compose date from datetime parts using OffsetDateTime instead of Calendar<br/>
+    Profit: more clear, concise, and fast code</li>
+    <li class="fragment">Optimized parseInt function with limited characters support</li>
+    <li class="fragment">Implemented sizeInDigits function using divide-and-conquer approach</li>
+</ol>
+                    </textarea>
+                </section>
+
+                <section data-markdown>
+                    <textarea data-template>
+## References
+
+[SimpleDateFormat Pattern Reference](https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html)
+
+[Joda Time Documentation](http://www.joda.org/joda-time/userguide.html)
+
+[DateTimeFormatter Pattern Reference](https://docs.oracle.com/javase/8/docs/api/java/time/format/DateTimeFormatter.html)
+
+[ATSD Date Format Pattern Reference](https://axibase.com/docs/atsd/shared/time-pattern.html)
+                    </textarea>
+                </section>
+
+				<section data-background-image="images/end.jpg">
+                    <!-- The End -->
+				</section>
+			</div>
+
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+        <script src="js/reveal.min.js"></script>
+        
+
+		<script>
+			Reveal.initialize({
+				controls: true,
+				progress: true,
+				history: true,
+				center: true,
+				slideNumber: true,
+
+				theme: 'moon', // available themes are in /css/theme
+				transition: Reveal.getQueryHash().transition || 'default', // default/cube/page/concave/zoom/linear/fade/none
+				dependencies: [
+					{ src: 'lib/js/classList.js', condition: function() { return !document.body.classList; } },
+					{ src: 'plugin/markdown/marked.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } },
+					{ src: 'plugin/zoom-js/zoom.js', async: true, condition: function() { return !!document.body.classList; } },
+					{ src: 'plugin/notes/notes.js', async: true, condition: function() { return !!document.body.classList; } }
+				]
+			});
+
+		</script>
+
+	</body>
+</html>
